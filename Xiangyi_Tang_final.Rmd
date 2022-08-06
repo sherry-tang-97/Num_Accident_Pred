@@ -1,0 +1,272 @@
+---
+title: "Sherry_Tang_final"
+author: "Xiangyi Tang"
+date: '2022-05-06'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+data <- read.csv("final_data_1-1.csv")
+```
+
+
+```{r}
+#Question3
+ggplot(data, aes(Safety_cost, Num_accidents))+
+  geom_point()
+
+ggplot(data, aes(Safety_cost, Num_accidents))+
+  geom_point()+
+  facet_wrap(~Status)
+```
+
+
+```{r}
+data %>%
+  filter(Status == 1 | Status ==3 )%>%
+    ggplot(aes(Safety_cost, Num_accidents))+
+      geom_point()+
+      facet_wrap(~Function)
+
+data %>%
+  filter(Status == 1 | Status == 3)%>%
+    ggplot(aes(Safety_cost, Num_accidents))+
+      geom_point()+
+      facet_wrap(~Commodity)
+```
+
+```{r}
+accidents
+```
+
+
+
+```{r}
+#Question 4
+#Convert the categorical variables to factors instead of numeric
+
+
+accidents = data
+
+accidents$Region = as.factor(accidents$Region)
+accidents$Commodity = as.factor(accidents$Commodity)
+accidents$Function = as.factor(accidents$Function)
+accidents$Status = as.factor(accidents$Status)
+
+
+#If additional information about the region is provided, the best case would be to regroup region into smaller number of groups, however, since there is no information regarding how to regroup, we will just remove this variable here
+
+accidents = accidents[ , !(names(accidents) %in% c("Region"))]
+
+#examine how many missing values in each variable
+apply(is.na(accidents), 2, sum)
+#we could consider removing safety_cost because it contains too many missing values. However, since this information is quire important, we may as well remove the observations that contain these missing values
+
+#remove the rows containing missing values
+
+accidents = accidents[!(is.na(data$Safety_cost)), ]
+accidents = accidents[!(is.na(data$Status)), ]
+
+#check for non-sensical data
+subset(accidents, accidents$Employee_hour <= 0)
+accidents = subset(accidents, accidents$Employee_hour > 0)
+
+
+#Examine collinearity
+accidents = accidents[ , !(names(accidents) %in% c("Employee_hour"))]
+```
+
+```{r}
+#Question 9
+set.seed(1)
+train_size = 0.8 * nrow(data)
+sample = sample.int(n = nrow(data), size = train_size, replace = F)
+train_data = data[sample, ]
+test_data  = data[-sample, ]
+
+
+fullmodel <- glm(Num_accidents~., family=poisson(), data=train_data)
+
+backward = step(fullmodel, direction = "backward")
+```
+
+
+
+```{r, warning=FALSE}
+#Question 10
+data_add_bi = data
+data_add_bi$acci_yes = as.numeric(!(data_add_bi$Num_accidents == 0))
+set.seed(1)
+train_size = 0.8 * nrow(data_add_bi)
+sample = sample.int(n = nrow(data_add_bi), size = train_size, replace = F)
+train_data_bi = data_add_bi[sample, ]
+test_data_bi  = data_add_bi[-sample, ]
+glm_full = glm(acci_yes~.-Num_accidents, family=binomial(link = "logit"), data=train_data_bi)
+back = step(glm_full, trace = 0)
+
+
+glm_update = glm(acci_yes ~ Commodity + Function + Status + Hours_operation + Hours_other, family = binomial(link = "logit"), data = train_data_bi)
+
+
+pred_full = predict(glm_full, test_data_bi, type = "response")
+pred_update = predict(glm_update, test_data_bi, type = "response")
+
+#Calculate accuracy
+pred_full = ifelse(pred_full > 0.5, 1, 0)
+acc_full=  mean(pred_full == test_data_bi$acci_yes)
+
+pred_update =ifelse(pred_update > 0.5, 1, 0)
+acc_update = mean(pred_update == test_data_bi$acci_yes)
+
+acc_full
+acc_update
+```
+
+
+
+```{r}
+#Question 11
+library(gbm)
+library(rpart)
+
+
+one = rpart(Num_accidents~., method="anova", data=train_data)
+two = gbm(Num_accidents~., data = train_data, n.trees = 10)
+
+  
+one_pred =predict(one, newdata = test_data)
+mse_one = mean((test_data$Num_accidents-one_pred)^2)
+  
+two_pred = predict(two, newdata = test_data)
+mse_two = mean((test_data$Num_accidents-two_pred)^2)
+
+mse_one
+mse_two
+
+
+```
+
+
+
+
+
+```{r, warning=FALSE}
+
+#Using cross validation to choose the best model
+
+set.seed(9586)
+library(caret)
+folds <- createFolds(accidents$Num_accidents, k = 10, list = TRUE, returnTrain = FALSE)
+
+
+#gradient boost
+
+mse_gb = rep(0, 10)
+for (i in 1:10) {
+  index = folds[[i]]
+  model = gbm(Num_accidents~., data = accidents[-index, ], n.trees = 500)
+  pred = predict(model, newdata = accidents[index, ])
+  mse_gb[i] = mean((accidents[index, ]$Num_accidents-pred)^2)
+}
+
+mse_gb
+mean(mse_gb)
+
+#linear regression
+
+mse_lm = rep(0, 10)
+for (i in 1:10) {
+  index = folds[[i]]
+  model = lm(Num_accidents ~ Commodity + Function + Status + Num_employee + 
+    Hours_office + Hours_operation + Hours_other + Safety_cost, data = accidents[-index, ])
+  pred = predict(model, newdata = accidents[index, ])
+  mse_lm[i] = mean((accidents[index, ]$Num_accidents-pred)^2)
+}
+
+mse_lm
+mean(mse_lm)
+
+
+#glm poisson
+
+
+mse_glm = rep(0, 10)
+for (i in 1:10) {
+  index = folds[[i]]
+  model = glm(Num_accidents~.-Year, family = poisson(link = "log"), data = accidents[-index, ])
+  pred = predict(model, newdata = accidents[index, ], type = "response")
+  mse_glm[i] = mean((accidents[index, ]$Num_accidents-pred)^2)
+}
+
+
+mse_glm
+mean(mse_glm)
+
+```
+
+
+
+```{r}
+index = folds[[9]]
+train = accidents[-index, ]
+test = accidents[index,]
+
+model = glm(Num_accidents~.-Year, family = Gamma(link = "inverse"), data = train)
+  pred = predict(model, newdata = test, type = "response")
+  mse = mean((test$Num_accidents-pred)^2)
+mse
+
+
+
+```
+
+
+```{r}
+index = folds[[1]]
+full_lm = lm(Num_accidents~., data = data[-1, ])
+back_lm = step(full_lm, direction = "backward")
+#Year and Distance was dropped
+```
+
+```{r}
+final_model = lm(Num_accidents ~ Commodity + Function + Status + Num_employee + 
+    Hours_office + Hours_operation + Hours_other + Safety_cost, data = data)
+
+#Calculate accuracy
+pred_data = predict(final_model, data)
+pred_data = round(pred_data)
+mean(pred_data == data$Num_accidents)
+
+summary(final_model)
+
+holdout = read.csv("final_data_holdout.csv")
+
+holdout$Commodity = as.factor(holdout$Commodity)
+holdout$Function = as.factor(holdout$Function)
+holdout$Status = as.factor(holdout$Status)
+
+prediction = predict(final_model, holdout)
+
+prediction = round(prediction)
+
+holdout$Num_accidents = prediction
+
+write.csv(holdout, "prediction.csv")
+```
+
+
+```{r}
+sort(accidents$Hours_office, TRUE)[1:20]
+```
+
+
+
+
+
+
